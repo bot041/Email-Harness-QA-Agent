@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Email Harness — QA Agent</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>📧 Email Harness</h1>
+            <p class="subtitle">AI-Powered Email QA Agent</p>
+        </header>
+
+        <!-- Input Section -->
+        <section class="input-section" id="inputSection">
+            <div class="card">
+                <h2>Review Your Email</h2>
+                <p class="hint">Paste your complete email below — including headers, body, and signature. The Agent will analyze it before you hit send.</p>
+                <textarea
+                    id="emailInput"
+                    placeholder="Paste your complete email here...
+Example:
+From: john.doe@company.com
+To: jane.smith@client.com
+Subject: Project Update — Q3 Review
+
+Hi Jane,
+
+I hope you're doing well. I wanted to share the latest updates on the Q3 project...
+
+Best regards,
+John"
+                    rows="16"
+                ></textarea>
+                <button id="reviewBtn" class="btn btn-primary" onclick="submitReview()">
+                    🔍 Review Email
+                </button>
+                <button id="loadSampleBtn" class="btn btn-secondary" onclick="loadSample()" style="margin-left: 8px;">
+                    📋 Load Sample
+                </button>
+            </div>
+        </section>
+
+        <!-- Loading -->
+        <section class="loading-section" id="loadingSection" style="display: none;">
+            <div class="card loading-card">
+                <div class="spinner"></div>
+                <p>Email Harness Agent is reviewing your email...</p>
+                <p class="loading-detail">Running rule engine checks &amp; AI semantic analysis</p>
+            </div>
+        </section>
+
+        <!-- Error -->
+        <section class="error-section" id="errorSection" style="display: none;">
+            <div class="card card-error" id="errorContent"></div>
+        </section>
+
+        <!-- Results Section -->
+        <section class="results-section" id="resultsSection" style="display: none;">
+            <!-- Overall Status -->
+            <div class="card status-card" id="statusCard">
+                <div class="status-badge" id="statusBadge"></div>
+                <p class="status-message" id="statusMessage"></p>
+            </div>
+
+            <!-- Validation Summary -->
+            <div class="card">
+                <h3>📊 Validation Summary</h3>
+                <div class="summary-grid" id="summaryGrid"></div>
+            </div>
+
+            <!-- Issues -->
+            <div class="card" id="issuesCard">
+                <h3>🔍 Issues Found</h3>
+                <div id="issuesList"></div>
+            </div>
+
+            <!-- AI Review -->
+            <div class="card" id="aiReviewCard">
+                <h3>🤖 AI Review Summary</h3>
+                <p id="aiReviewText"></p>
+            </div>
+
+            <!-- Final Recommendation -->
+            <div class="card" id="finalRecCard">
+                <h3>📝 Final Recommendation</h3>
+                <p id="finalRecText"></p>
+            </div>
+        </section>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Email Harness QA Agent · Hybrid Rule Engine + AI Review</p>
+        </footer>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

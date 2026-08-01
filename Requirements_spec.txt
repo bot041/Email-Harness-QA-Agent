@@ -1,0 +1,198 @@
+Requirements.txt
+
+Project: Email Harness QA Agent
+
+Objective
+
+Build a web application that reviews an already-written email and
+generates a professional QA report before the email is sent. The
+application MUST NOT generate or rewrite the entire email. It should
+identify issues, explain why they matter, and provide actionable
+recommendations.
+
+Technology Stack
+
+Frontend: - HTML5 - CSS3 - Vanilla JavaScript
+
+Backend: - Flask (Python)
+
+LLM: - DeepSeek API
+
+Architecture: - Single AI Agent (Email Harness) - Hybrid validation
+(Rule Engine + DeepSeek)
+
+Memory: - Session-based memory removed — no comparison feature
+
+Dependencies (pip)
+
+- flask==3.1.0
+- requests==2.32.3
+- python-dotenv==1.1.0
+
+User Flow
+
+1.  User pastes the complete email copied from Gmail/Outlook.
+2.  User clicks “Review”.
+3.  Email Harness Agent receives the goal: “Review this email.”
+4.  Agent decides which validation tools to invoke.
+5.  Rule Engine performs deterministic validation.
+6.  DeepSeek performs semantic review.
+7.  Agent aggregates all results.
+8.  Professional QA Report is generated.
+
+Input
+
+The user pastes the complete email as raw text, including: - Sender -
+Recipient(s) - Date (if present) - Subject (if present) - Email body -
+Closing - Signature
+
+No manual field mapping should be required.
+
+AI Agent Design
+
+The Email Harness Agent is the orchestrator.
+
+Responsibilities: - Understand the goal. - Parse the email. - Decide
+which validation tools are required. - Invoke only relevant tools. -
+Aggregate tool outputs. - Produce one unified QA report.
+
+Do NOT implement a multi-agent system.
+
+Validation Tools
+
+1.  Subject Validator Checks:
+
+-   Subject exists
+-   Subject is meaningful
+-   Subject is not generic
+
+2.  Recipient Validator Checks:
+
+-   Recipient exists
+-   Recipient format is valid
+-   Duplicate recipients
+
+3.  Greeting Validator Checks:
+
+-   Greeting exists
+-   Greeting is appropriate
+
+4.  Grammar & Spelling Validator Uses DeepSeek to detect:
+
+-   Grammar errors
+-   Spelling mistakes
+-   Awkward wording
+
+5.  Call-To-Action Validator Checks whether the email clearly
+    communicates the expected next action.
+
+6.  Duplicate Content Detector Detect:
+
+-   Repeated paragraphs
+-   Repeated sentences
+-   Unnecessary repetition
+
+Rule Engine
+
+Implement deterministic checks where possible. Avoid using the LLM for
+simple validations.
+
+DeepSeek Responsibilities
+
+DeepSeek should evaluate: - Greeting quality - Grammar - Spelling -
+Clarity - Professionalism - Call-to-action quality - Overall
+communication effectiveness - Recommendations
+
+DeepSeek should return structured JSON.
+
+Prompt includes guardrails to prevent false positives:
+- Harness CI/CD template expressions (<+pipeline.name>,
+  <+pipeline.executionId>, etc.) are recognized as valid runtime
+  variables and are NOT flagged as issues.
+- Minor signature formatting (spacing around colons, emoji vs text
+  labels, inconsistent contact detail styles) is treated as personal
+  style and NOT flagged.
+- Focus is on what matters: grammar, spelling, clarity, tone, CTA, and
+  missing critical elements (subject, greeting, recipient).
+
+Professional QA Report
+
+The report should contain:
+
+Overall Status: - Ready to Send - Needs Review - Not Ready to Send
+
+Validation Summary
+
+Issues Found For every issue include: - Title - Description - Why it
+matters - Recommendation
+
+AI Review Summary
+
+Final Recommendation
+
+Do NOT assign numeric scores.
+
+Session Memory
+
+Removed. No session-based comparison or history. Each review is
+independent.
+
+Flask Project Structure
+
+app/ routes/ agents/ validators/ services/ memory/ templates/ static/
+css/ js/ utils/ config/ app.py
+
+API Endpoints
+
+GET / Display the web interface.
+
+POST /review Accept raw email text and return the QA report.
+
+GET /health Health check endpoint.
+
+Note: The POST /compare endpoint has been removed.
+
+UI Pages
+
+Home - Large text area - Review button - Load Sample button (cycles
+through 6 sample emails: 5 with various issues + 1 perfect email)
+
+QA Report - Overall Status - Validation Summary - Issues -
+Recommendations - AI Review
+
+Note: Comparison View removed. Source badges (Rule Engine / DeepSeek AI)
+hidden from issue cards. DeepSeek branding replaced with "Review" / "AI
+Review" for a clean user experience.
+
+Non-Functional Requirements
+
+-   Clean UI
+-   Fast response
+-   Modular architecture
+-   Extensible validators
+-   Error handling for API failures
+-   Secure API key management via environment variables
+
+Future Enhancements
+
+-   Gmail integration
+-   Outlook integration
+-   Attachment validation
+-   Signature validation
+-   Link validation
+-   PII detection
+-   Company policy enforcement
+-   Export QA report as PDF
+
+Success Criteria
+
+-   User pastes an email.
+-   Agent autonomously selects relevant validation tools.
+-   Hybrid rule engine + DeepSeek review is executed.
+-   Professional QA report is generated.
+-   Harness template expressions are never flagged as issues.
+-   Signature formatting nitpicks are suppressed.
+-   Comma in greetings is preserved from original email.
+-   UI is clean: no source badges, no session history, no comparison.
+-   Load Sample cycles through 6 diverse emails (5 issues + 1 perfect).
+-   System is modular and easy to extend.

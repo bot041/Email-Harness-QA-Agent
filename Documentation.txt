@@ -1,0 +1,758 @@
+================================================================================
+  EMAIL HARNESS QA AGENT — COMPLETE DOCUMENTATION
+================================================================================
+
+Author: Bhuvan Kambad
+Date:   August 2026
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+1.  Project Overview
+2.  Problem Statement
+3.  Architecture & Design Philosophy
+4.  Technology Stack
+5.  Project Structure
+6.  Core Components — Deep Dive
+    6.1  Email Parser (app/utils/email_parser.py)
+    6.2  Rule Engine Validators (app/validators/rule_engine.py)
+    6.3  DeepSeek AI Service (app/services/deepseek_service.py)
+    6.4  Email Harness Agent (app/agents/email_harness.py)
+    6.5  Data Models (app/validators/models.py)
+    6.6  Flask Routes (app/routes/main.py)
+    6.7  Frontend UI (app/templates/index.html, app/static/)
+7.  API Endpoints
+8.  User Flow
+9.  Key Design Decisions & Trade-offs
+10. Guardrails & False-Positive Prevention
+11. Load Sample Emails
+12. Configuration & Environment
+13. How to Run the Project
+14. Testing & Verification
+15. Future Enhancements
+16. Interview Talking Points
+
+================================================================================
+1. PROJECT OVERVIEW
+================================================================================
+
+The Email Harness QA Agent is a web application that reviews already-written
+emails and generates a professional QA report BEFORE the email is sent.
+
+It does NOT generate or rewrite emails. Instead, it acts as a quality
+gate — identifying issues, explaining why they matter, and providing
+actionable recommendations.
+
+Think of it as a "spell-check + proofreader + communication coach" for
+professional emails, powered by a hybrid approach of deterministic rules
+AND AI semantic analysis.
+
+Core Promise: Paste an email → Get a QA report → Fix issues → Send with
+confidence.
+
+================================================================================
+2. PROBLEM STATEMENT
+================================================================================
+
+Professionals send dozens of emails daily, and small mistakes can have
+outsized consequences:
+  - A missing subject line → email gets ignored or marked as spam
+  - A typo → undermines credibility with clients or executives
+  - An unclear call-to-action → delays and miscommunication
+  - An overly casual tone → damages professional relationships
+
+Existing solutions (Grammarly, etc.) focus on grammar alone. They don't
+understand email-specific concerns like subject quality, greeting
+appropriateness, CTA clarity, or duplicate content.
+
+This agent solves that by combining:
+  - FAST deterministic rules (instant checks for structural issues)
+  - DEEP AI analysis (semantic review of tone, clarity, professionalism)
+
+================================================================================
+3. ARCHITECTURE & DESIGN PHILOSOPHY
+================================================================================
+
+The project follows a SINGLE AGENT architecture — one orchestrator that
+manages the entire pipeline. This is deliberate:
+
+  ✅ Simpler to understand, debug, and extend
+  ✅ No inter-agent communication overhead
+  ✅ Deterministic flow: parse → validate → review → report
+  ✅ Easy to add new validators (just register in the rule engine)
+
+The HYBRID approach is key to the design:
+
+  ┌─────────────────────────────────────────────────────┐
+  │                 Email Harness Agent                   │
+  │                 (Orchestrator)                        │
+  │                                                       │
+  │  1. Parse Email ──→ Structured Fields                 │
+  │  2. Run Rule Engine ──→ Deterministic Issues          │
+  │  3. Run DeepSeek AI ──→ Semantic Issues               │
+  │  4. Filter False Positives ──→ Clean Issues           │
+  │  5. Determine Status ──→ Ready / Needs / Not Ready    │
+  │  6. Build QA Report ──→ Unified Output                │
+  └─────────────────────────────────────────────────────┘
+
+Why NOT send everything to the AI?
+  → LLMs are slow and expensive for simple checks.
+     "Is the subject empty?" doesn't need AI — a regex is faster,
+     cheaper, and 100% reliable.
+
+Why NOT use only deterministic rules?
+  → Rules can't judge tone, clarity, or professionalism. You need
+     semantic understanding for that.
+
+================================================================================
+4. TECHNOLOGY STACK
+================================================================================
+
+  Frontend:    HTML5, CSS3, Vanilla JavaScript (no frameworks)
+  Backend:     Flask 3.1.0 (Python)
+  AI/LLM:      DeepSeek API (deepseek-chat model)
+  Python Deps: requests 2.32.3, python-dotenv 1.1.0
+
+Why Vanilla JS?
+  → No build step, no framework overhead. The UI is simple enough
+    that React/Vue would add complexity without benefit.
+
+Why Flask?
+  → Lightweight, Python-native, perfect for an API + template rendering
+    microservice. No ORM needed (no database).
+
+Why DeepSeek?
+  → Cost-effective compared to GPT-4, strong performance on structured
+    JSON output tasks, and the chat completions API is OpenAI-compatible
+    making it easy to swap later.
+
+================================================================================
+5. PROJECT STRUCTURE
+================================================================================
+
+Email Harness Agent LLM/
+├── app.py                          # Application entry point
+├── Requirements_spec.txt           # Full requirements + dependencies
+├── .env                            # API keys & secrets (gitignored)
+├── .env.example                    # Template for .env
+├── app/
+│   ├── __init__.py                 # Flask app factory
+│   ├── config.py                   # Configuration (API keys, limits)
+│   ├── agents/
+│   │   └── email_harness.py        # ★ THE ORCHESTRATOR ★
+│   ├── validators/
+│   │   ├── models.py               # Data classes (Issue, QAReport)
+│   │   └── rule_engine.py          # Deterministic validators (4 checks)
+│   ├── services/
+│   │   └── deepseek_service.py     # DeepSeek API + mock fallback
+│   ├── utils/
+│   │   └── email_parser.py         # Regex-based email parser
+│   ├── memory/
+│   │   └── session_memory.py       # Session storage (deprecated)
+│   ├── routes/
+│   │   └── main.py                 # Flask routes (/, /review, /health)
+│   ├── templates/
+│   │   └── index.html              # Single-page UI
+│   └── static/
+│       ├── css/style.css           # All styles
+│       └── js/app.js               # Frontend logic
+└── .venv/                          # Python virtual environment
+
+================================================================================
+6. CORE COMPONENTS — DEEP DIVE
+================================================================================
+
+6.1 EMAIL PARSER (app/utils/email_parser.py)
+────────────────────────────────────────────
+
+Purpose: Convert raw pasted email text into structured fields.
+
+Input:  Raw text (copied from Gmail, Outlook, or typed)
+Output: Dict with: sender, recipients[], date, subject, greeting,
+        body, closing, signature
+
+How it works:
+  Step 1 — Header Detection (lines 37-78):
+    Scans for "From:", "To:", "Cc:", "Date:", "Subject:" patterns
+    using regex. Extracts structured data from each header line.
+    Stops when it hits body-like content (e.g., "Dear...", "Hi...").
+
+  Step 2 — Greeting Extraction (lines 91-102):
+    Matches common greeting patterns:
+      "Dear [Name],"
+      "Hi [Name],"
+      "Hello [Name],"
+      "Good morning/afternoon/evening [Name],"
+    Preserves the comma if present (critical for accuracy).
+
+  Step 3 — Closing Detection (lines 104-129):
+    Matches common closings:
+      "Best regards", "Sincerely", "Thanks", "Cheers",
+      "Kind regards", "Warm regards", etc.
+
+  Step 4 — Signature Extraction (lines 131-137):
+    Everything after the closing is treated as signature.
+
+  Step 5 — Email Address Extraction (lines 155-171):
+    Uses email regex to pull addresses from "Name <email>" format.
+    Deduplicates recipients while preserving order.
+
+Key Design Choice: No AI needed for parsing. Regex is deterministic,
+fast, and handles 95%+ of real-world email formats.
+
+================================================================================
+
+6.2 RULE ENGINE VALIDATORS (app/validators/rule_engine.py)
+───────────────────────────────────────────────────────────
+
+Purpose: Fast, deterministic checks — no AI calls.
+
+The rule engine runs 4 validators. Each validator returns a
+ValidationResult with: validator_name, passed (bool), issues (list).
+
+┌──────────────────────────────────────────────────────────────┐
+│ VALIDATOR 1: SubjectValidator                                 │
+├──────────────────────────────────────────────────────────────┤
+│ Checks:                                                       │
+│  ✅ Subject exists                                            │
+│  ✅ Subject length (3-100 chars is reasonable)                │
+│  ✅ Subject is not generic ("Meeting", "Hello", "Update",     │
+│     "Urgent", "FYI", etc. — 17 common generic words)         │
+│  ✅ Subject is not ALL CAPS (looks aggressive/spam-like)      │
+│                                                               │
+│ Why it matters: Subjects determine whether your email gets     │
+│ opened. Generic or missing subjects reduce response rates.    │
+└──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│ VALIDATOR 2: RecipientValidator                               │
+├──────────────────────────────────────────────────────────────┤
+│ Checks:                                                       │
+│  ✅ At least one recipient exists                             │
+│  ✅ Recipient email format is valid (regex validation)        │
+│  ✅ No duplicate recipients (case-insensitive dedup)          │
+│  ✅ Not too many direct recipients (>10 warns about BCC)      │
+│                                                               │
+│ Why it matters: Invalid recipients cause bounces. Duplicates  │
+│ annoy people. Exposing many addresses violates privacy.       │
+└──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│ VALIDATOR 3: GreetingValidator                                │
+├──────────────────────────────────────────────────────────────┤
+│ Checks:                                                       │
+│  ✅ Greeting exists (or body starts with greeting-like word)  │
+│  ✅ Greeting is not overly casual ("Yo", "Sup", "Wassup",     │
+│     "Oi", "Heya")                                             │
+│  ✅ Greeting is personalized (not generic "Hi there",         │
+│     "Dear Sir/Madam", "To Whom It May Concern", etc.)         │
+│                                                               │
+│ Why it matters: Greetings set the tone. Missing or overly     │
+│ casual greetings feel abrupt. Generic greetings feel          │
+│ impersonal. Personalized greetings build rapport.             │
+└──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│ VALIDATOR 4: DuplicateContentDetector                         │
+├──────────────────────────────────────────────────────────────┤
+│ Checks:                                                       │
+│  ✅ No repeated paragraphs (>30 chars, normalized comparison) │
+│  ✅ No repeated sentences (>20 chars, normalized comparison)  │
+│                                                               │
+│ Why it matters: Repeated content suggests the email wasn't    │
+│ proofread. It wastes the reader's time and buries the key     │
+│ message.                                                      │
+└──────────────────────────────────────────────────────────────┘
+
+Each validator is independent — you can add, remove, or modify them
+without touching any other code. New validators just need to:
+  1. Implement validate(parsed_email) → ValidationResult
+  2. Register in run_rule_engine()
+
+================================================================================
+
+6.3 DEEPSEEK AI SERVICE (app/services/deepseek_service.py)
+───────────────────────────────────────────────────────────
+
+Purpose: Semantic email review for issues that rules can't catch.
+
+What it evaluates:
+  1. Grammar — tense issues, subject-verb agreement
+  2. Spelling — typos, misspellings
+  3. Clarity — confusing sentences, ambiguous phrasing
+  4. Professionalism — appropriate tone for business context
+  5. Call-to-Action (CTA) — does the recipient know what to do?
+  6. Tone — respectful, appropriate, not aggressive
+  7. Overall — is this email ready to send?
+
+How it works:
+  Step 1 — Format the parsed email into a review text block
+  Step 2 — Build a structured prompt with clear instructions
+  Step 3 — Send to DeepSeek API (temperature=0.3 for consistency)
+  Step 4 — Parse the JSON response (handles code fences if present)
+  Step 5 — Return structured dict: {issues, summary, overall_assessment}
+
+Fallback Mode:
+  If no API key is configured (or key starts with "sk-your-"),
+  the service falls back to _mock_review() — heuristic checks for:
+    - Empty body (critical)
+    - Very short body (<10 words)
+    - Very long body (>2000 words)
+    - Common typos ("recieve"→"receive", "definately"→"definitely", etc.)
+    - Excessive punctuation (!!!, ???)
+    - Missing call-to-action
+  This makes the app fully functional even without an API key.
+
+Prompt Engineering Details:
+  - System message: "Expert email QA reviewer" role
+  - Structured output: Forced JSON format with specific schema
+  - Temperature 0.3: Balances consistency with some flexibility
+  - Max tokens 2000: Enough for detailed issues + summary
+  - Timeout 30s: Prevents hanging on API issues
+
+================================================================================
+
+6.4 EMAIL HARNESS AGENT (app/agents/email_harness.py)
+──────────────────────────────────────────────────────
+
+Purpose: The central orchestrator. This is the "brain" of the system.
+
+Class: EmailHarnessAgent
+  - __init__(): Sets the goal to "Review this email."
+  - review(raw_email_text) → QAReport: The main pipeline
+  - _filter_harness_false_positives(issues) → (filtered, count)
+  - _determine_overall_status(...) → status string
+  - _build_final_recommendation(...) → recommendation string
+
+The review() pipeline (8 steps):
+
+  Step 1: Parse the email into structured fields
+  Step 2: Run all 4 rule engine validators
+  Step 3: Run DeepSeek semantic review
+  Step 4: Aggregate all issues from both sources
+  Step 5: Filter out Harness template expression false positives
+  Step 5b: If ALL DeepSeek issues were false positives, treat
+           assessment as "Ready to Send" (prevents contradictory
+           "0 issues but Not Ready to Send" state)
+  Step 6: Determine overall status
+  Step 7: Build validation summary with counts
+  Step 8: Build final recommendation and return QAReport
+
+Status Determination Logic:
+  - "Not Ready to Send": Blocking issues from rule engine (missing
+    subject, no recipient, empty body) OR DeepSeek says Not Ready
+  - "Needs Review": 1+ issues found but no blockers
+  - "Ready to Send": Zero issues
+
+================================================================================
+
+6.5 DATA MODELS (app/validators/models.py)
+───────────────────────────────────────────
+
+@dataclass Issue:
+  title: str            # "Missing Subject Line"
+  description: str      # "The email has no subject line."
+  why_it_matters: str   # "Emails without subjects are often ignored..."
+  recommendation: str   # "Add a concise, descriptive subject..."
+  source: str           # "rule_engine" or "deepseek"
+
+@dataclass ValidationResult:
+  validator_name: str   # "Subject Validator"
+  passed: bool          # True if no issues found
+  issues: list[Issue]   # List of issues (empty if passed)
+
+@dataclass QAReport:
+  overall_status: str          # "Ready to Send" | "Needs Review" |
+                               # "Not Ready to Send"
+  validation_summary: dict     # {total_checks, passed, issues_found,
+                               #  rule_engine_results, deepseek_assessment}
+  issues: list[Issue]          # All issues found
+  ai_review_summary: str       # 2-4 sentence AI summary
+  final_recommendation: str    # Actionable final guidance
+
+Design Choice: Using Python dataclasses gives us type safety without
+the overhead of Pydantic or SQLAlchemy (no database needed).
+
+================================================================================
+
+6.6 FLASK ROUTES (app/routes/main.py)
+──────────────────────────────────────
+
+GET  /            → Renders the single-page web interface
+POST /review      → Accepts {email_text}, returns {report}
+GET  /health      → Returns {status, deepseek_api_configured}
+
+The /review endpoint:
+  1. Validates input (email_text must exist, length < 50,000 chars)
+  2. Creates EmailHarnessAgent instance
+  3. Calls agent.review(email_text)
+  4. Converts QAReport → JSON-safe dict
+  5. Returns {report: {...}}
+
+No session storage. No comparison endpoint. Clean and simple.
+
+================================================================================
+
+6.7 FRONTEND UI (app/templates/index.html, app/static/)
+────────────────────────────────────────────────────────
+
+Design Philosophy:
+  - Single page, no routing needed
+  - Clean, professional design with CSS variables for consistency
+  - Responsive (works on desktop and mobile)
+  - Keyboard shortcut: Ctrl+Enter to review
+
+UI Sections:
+  1. Header — App name + subtitle
+  2. Input Section — Large textarea + Review button + Load Sample button
+  3. Loading Section — Spinner shown during API call
+  4. Error Section — Shown on failures
+  5. Results Section:
+     - Overall Status card (color-coded: green/yellow/red)
+     - Validation Summary grid (total checks, passed, issues found)
+     - Per-validator breakdown
+     - Issues list (each with title, description, why it matters,
+       recommendation)
+     - AI Review Summary
+     - Final Recommendation
+  6. Footer — App tagline
+
+Color Coding:
+  - Green  (#10b981): Ready to Send, passed checks
+  - Yellow (#f59e0b): Needs Review, warnings
+  - Red    (#ef4444): Not Ready to Send, issues
+
+CSS Architecture:
+  - CSS custom properties for all colors (easy to rebrand)
+  - Card-based layout with consistent spacing
+  - Subtle shadows and borders for depth
+  - Smooth transitions on interactive elements
+  - Mobile-responsive grid layout
+
+JavaScript Logic (app.js):
+  - submitReview(): POST to /review, render results
+  - renderResults(): Build the QA report UI from JSON
+  - loadSample(): Cycle through 6 sample emails
+  - hideAll(): Reset UI state between reviews
+  - escapeHtml(): XSS prevention for user content
+  - Keyboard shortcut: Ctrl+Enter triggers review
+
+================================================================================
+7. API ENDPOINTS
+================================================================================
+
+┌──────────┬──────────┬─────────────────────────────────────────┐
+│ Method   │ Route    │ Description                             │
+├──────────┼──────────┼─────────────────────────────────────────┤
+│ GET      │ /        │ Serve the web interface (HTML page)     │
+├──────────┼──────────┼─────────────────────────────────────────┤
+│ POST     │ /review  │ Review an email, return QA report       │
+├──────────┼──────────┼─────────────────────────────────────────┤
+│ GET      │ /health  │ Health check + API key status           │
+└──────────┴──────────┴─────────────────────────────────────────┘
+
+POST /review
+  Request:  { "email_text": "From: ...\\nTo: ...\\nSubject: ...\\n..." }
+  Response: {
+    "report": {
+      "overall_status": "Needs Review",
+      "validation_summary": {
+        "total_checks": 5,
+        "passed": 3,
+        "issues_found": 2,
+        "rule_engine_results": [...],
+        "deepseek_assessment": "Needs Review"
+      },
+      "issues": [
+        {
+          "title": "...",
+          "description": "...",
+          "why_it_matters": "...",
+          "recommendation": "...",
+          "source": "rule_engine"
+        }
+      ],
+      "ai_review_summary": "...",
+      "final_recommendation": "..."
+    }
+  }
+  Errors:
+    400 - Missing email_text
+    413 - Email exceeds 50,000 characters
+    500 - Server error (shown as HTML in browser, JSON in API)
+
+================================================================================
+8. USER FLOW
+================================================================================
+
+1. User opens the web app (http://127.0.0.1:5000)
+2. User pastes a complete email into the text area
+   (or clicks "Load Sample" to try a pre-built example)
+3. User clicks "Review Email" (or presses Ctrl+Enter)
+4. Loading spinner appears while the agent works
+5. QA Report appears with:
+   - Overall Status badge (Ready/Needs Review/Not Ready)
+   - Validation Summary (checks passed vs failed)
+   - Per-validator breakdown
+   - List of issues with explanations and fixes
+   - AI review summary
+   - Final recommendation
+6. User reads issues, fixes their email, pastes again
+7. Process repeats until "Ready to Send"
+
+================================================================================
+9. KEY DESIGN DECISIONS & TRADE-OFFS
+================================================================================
+
+Decision 1: Single Agent, NOT Multi-Agent
+  Why: The problem space (review one email) doesn't benefit from
+       multiple agents. A single orchestrator is simpler, faster,
+       and easier to debug.
+  Trade-off: Less parallelization, but email review is fast enough
+       that it doesn't matter (< 5 seconds total).
+
+Decision 2: Hybrid Rule Engine + AI, NOT AI-only
+  Why: Rules are instant and deterministic. AI is slow and can
+       hallucinate. Use rules for structural checks, AI for
+       semantic understanding.
+  Trade-off: Two code paths to maintain, but each is simple.
+
+Decision 3: Vanilla JavaScript, NOT React/Vue
+  Why: The UI is a single page with one interactive flow. No need
+       for component state management or virtual DOM.
+  Trade-off: Would be harder to scale to a complex SPA, but that's
+       not the goal.
+
+Decision 4: Regex Parser, NOT ML/NLP Parser
+  Why: Email headers follow predictable patterns. Regex is fast,
+       deterministic, and handles 95%+ of cases.
+  Trade-off: Edge cases like non-standard headers might be missed,
+       but they're rare in practice.
+
+Decision 5: No Database, No Authentication
+  Why: This is a tool, not a platform. Each review is independent.
+       No need to store data.
+  Trade-off: No history, no multi-user support. Acceptable for MVP.
+
+Decision 6: DeepSeek over GPT-4
+  Why: 10-20x cheaper, comparable quality on structured tasks,
+       OpenAI-compatible API for easy migration.
+  Trade-off: Slightly less nuanced on very complex emails, but
+       more than sufficient for professional email review.
+
+================================================================================
+10. GUARDRAILS & FALSE-POSITIVE PREVENTION
+================================================================================
+
+The system uses a DEFENSE-IN-DEPTH strategy to prevent false positives:
+
+LAYER 1 — Prompt Engineering (deepseek_service.py):
+  The DeepSeek prompt explicitly instructs the model to ignore:
+  ✅ Harness CI/CD template expressions (<+pipeline.name>,
+     <+pipeline.executionId>, etc.) — valid runtime variables
+  ✅ Minor signature formatting (spacing around colons, emoji vs
+     text labels, inconsistent contact detail styles)
+  ✅ The prompt tells the model to focus on what matters: grammar,
+     spelling, clarity, tone, CTA, and missing critical elements
+
+LAYER 2 — Post-Processing Filter (email_harness.py):
+  After collecting all issues, the agent runs a filter that removes
+  any issue where the title or description:
+  ✅ Contains <+...> pattern (Harness template expression syntax)
+  ✅ Contains keywords: "placeholder", "unresolved", "template
+     expression", "harness", "not resolved"
+
+LAYER 3 — Effective Assessment (email_harness.py):
+  If ALL DeepSeek issues were false positives and got filtered out,
+  the assessment is promoted to "Ready to Send" instead of showing
+  a contradictory "0 issues but Not Ready to Send".
+
+LAYER 4 — Greeting Comma Preservation (email_parser.py):
+  The parser preserves the original comma in greetings. "Dear
+  Hiring Team," stays as "Dear Hiring Team," — preventing false
+  "missing comma" flags from the AI.
+
+================================================================================
+11. LOAD SAMPLE EMAILS
+================================================================================
+
+The "Load Sample" button cycles through 6 diverse emails:
+
+Sample 1 — "The Sloppy One"
+  Issues: Generic subject ("Meeting"), typo ("definately"),
+          duplicate paragraph, impersonal greeting ("Hi,")
+  Status: Needs Review (4+ issues)
+
+Sample 2 — "The Minimalist"
+  Issues: Missing subject line, no greeting, very short body
+          (2 words), no clear CTA
+  Status: Not Ready to Send
+
+Sample 3 — "The Aggressive One"
+  Issues: ALL CAPS subject, overly casual greeting ("Yo,"),
+          run-on sentences, urgent/panicked tone
+  Status: Needs Review
+
+Sample 4 — "The Broadcast"
+  Issues: 11 direct recipients (privacy concern), missing subject
+          line, no greeting, overly long body
+  Status: Not Ready to Send
+
+Sample 5 — "The Pretty Good One"
+  Issues: Minor or none. Well-structured with bullet points,
+          personalized greeting ("Dear James,"), clear CTA
+  Status: Ready to Send or Needs Review (1 minor issue)
+
+Sample 6 — "The Perfect One" ★
+  Issues: ZERO. Proper subject, personalized greeting, clear
+          body, specific CTA ("reach out by Wednesday"),
+          professional closing, complete signature
+  Status: Ready to Send
+
+These samples demonstrate the full spectrum: from "don't send this"
+to "perfect, send it now."
+
+================================================================================
+12. CONFIGURATION & ENVIRONMENT
+================================================================================
+
+.env file (gitignored, never committed):
+  DEEPSEEK_API_KEY=sk-...      # DeepSeek API key
+  FLASK_SECRET_KEY=...          # Flask session secret
+
+.env.example (committed, safe template):
+  DEEPSEEK_API_KEY=sk-your-deepseek-api-key-here
+  FLASK_SECRET_KEY=change-this-to-a-random-secret
+
+Config class (app/config.py):
+  SECRET_KEY          — from env, with dev fallback
+  DEEPSEEK_API_KEY    — from env
+  DEEPSEEK_BASE_URL   — https://api.deepseek.com/v1/chat/completions
+  DEEPSEEK_MODEL      — "deepseek-chat"
+  MAX_EMAIL_LENGTH    — 50,000 characters
+
+================================================================================
+13. HOW TO RUN THE PROJECT
+================================================================================
+
+Prerequisites:
+  - Python 3.10+
+  - Git Bash (or any terminal on Windows/Mac/Linux)
+
+Setup:
+  1. cd "Email Harness Agent LLM"
+  2. python -m venv .venv
+  3. source .venv/Scripts/activate  (or .venv/bin/activate on Mac)
+  4. pip install flask==3.1.0 requests==2.32.3 python-dotenv==1.1.0
+  5. cp .env.example .env
+  6. Edit .env — add your DeepSeek API key
+
+Run:
+  7. python app.py
+  8. Open http://127.0.0.1:5000 in your browser
+
+Without DeepSeek API key:
+  The app works in "mock mode" — uses heuristic checks for basic
+  validation. Grammar/tone/clarity review will be limited, but all
+  rule engine checks work perfectly.
+
+================================================================================
+14. TESTING & VERIFICATION
+================================================================================
+
+Manual Test Scenarios:
+
+  Test 1 — Perfect Email (Sample 6):
+    → Should return "Ready to Send" with 0 issues
+
+  Test 2 — Harness Expressions:
+    → Paste an email with <+pipeline.name> in the body
+    → Should NOT flag it as an "unresolved placeholder"
+
+  Test 3 — Comma in Greeting:
+    → Use "Dear Hiring Team,"
+    → Should NOT show "Missing comma after greeting"
+
+  Test 4 — Signature Formatting:
+    → Use "GitHub : link" and "📧 email" in signature
+    → Should NOT flag inconsistent spacing or emoji
+
+  Test 5 — Real Issues:
+    → Remove subject, use "Yo," as greeting, include typos
+    → Should catch all real issues
+
+  Test 6 — Health Check:
+    → GET http://127.0.0.1:5000/health
+    → Should return {"status": "healthy", ...}
+
+================================================================================
+15. FUTURE ENHANCEMENTS
+================================================================================
+
+Priority 1 (High Impact, Low Effort):
+  □ Attachment validation (check if "attached" mentioned but no file)
+  □ Link validation (check for broken/malformed URLs)
+  □ PII detection (flag emails containing SSNs, credit cards, etc.)
+
+Priority 2 (Medium Impact):
+  □ Gmail API integration (review directly from Gmail)
+  □ Outlook/Exchange integration
+  □ Export QA report as PDF
+  □ Dark mode toggle
+
+Priority 3 (Platform-scale):
+  □ Company policy enforcement (custom rules per organization)
+  □ Multi-language support
+  □ Email templates library with pre-reviewed templates
+  □ Analytics dashboard (common issues across teams)
+
+================================================================================
+16. INTERVIEW TALKING POINTS
+================================================================================
+
+When presenting this project in an interview, emphasize:
+
+1. THE PROBLEM — Start with WHY
+   "Professionals send 40+ emails daily. Small mistakes in subject
+   lines, greetings, or tone can damage credibility and cause
+   miscommunication. I built a tool that acts as a quality gate
+   before you hit send."
+
+2. THE ARCHITECTURE — Show you think in SYSTEMS
+   "I used a hybrid approach: deterministic rules for fast,
+   reliable structural checks, and AI for semantic understanding
+   of tone, clarity, and professionalism. The rule engine catches
+   'is the subject empty?' instantly. The AI catches 'is this
+   email too aggressive?' — something rules can't do."
+
+3. THE DESIGN DECISIONS — Show you make TRADE-OFFS
+   "I chose a single agent over multi-agent because the problem
+   doesn't benefit from parallelism. I chose regex parsing over
+   ML parsing because email headers are predictable. I chose
+   Vanilla JS over React because the UI is a single page with
+   one flow. Every decision was intentional."
+
+4. THE GUARDRAILS — Show you think about EDGE CASES
+   "I added defense-in-depth against false positives. The prompt
+   tells the AI to ignore Harness template expressions. But if it
+   still flags them, a post-processing filter catches them. And
+   if ALL AI issues get filtered, the status auto-corrects so the
+   report never shows '0 issues but Not Ready to Send'."
+
+5. THE USER EXPERIENCE — Show you care about POLISH
+   "I removed technical jargon like 'DeepSeek Semantic Review' and
+   replaced it with just 'Review'. I hid source badges so users
+   don't need to know or care whether an issue came from rules or
+   AI. I added 6 diverse sample emails so anyone can understand
+   the full capability in 2 minutes."
+
+6. THE CODE QUALITY — Show you write MAINTAINABLE code
+   "Each validator is independent — you add a new one by writing
+   one class with one method. The parser, validators, AI service,
+   and agent are separated concerns. The entire system is <1000
+   lines of Python and <300 lines of JavaScript."
+
+================================================================================
+END OF DOCUMENTATION
+================================================================================
