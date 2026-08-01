@@ -155,5 +155,3 @@ The system prevents false positives at multiple layers:
 - Dark mode
 
 ---
-
-🤖 Built with Flask + DeepSeek AI
